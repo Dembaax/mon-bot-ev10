@@ -12,8 +12,8 @@ from discord.ext import commands
 # Charge .env si présent (local)
 load_dotenv()
 
-# Récupère TOUTES les vars d’environnement (Railway, Heroku…)
-TOKEN = os.getenv("TOKEN")
+# Récupère toutes les vars d’environnement (Railway, Heroku, etc.)
+TOKEN = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 
 # Vérifie et convertit l’ID du salon en int
@@ -37,7 +37,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- 3) Mots-clés par extension ---
 EXTENSIONS = {
-    "EV10":  ["écarlate", "violet", "rivaux", "destinées"],
+    "EV10": ["écarlate", "violet", "rivaux", "destinées"],
     "EV8.5": ["évolutions prismatiques", "super premium", "8.5"],
     "EV151": ["151", "classique", "première génération"],
 }
@@ -45,68 +45,61 @@ EXTENSIONS = {
 # --- 4) Sites à scraper ---
 SITES = {
     "Micromania": "https://www.micromania.fr/cartes-pokemon.html",
-    "SmithToys":  "https://www.smithtoys.fr/collections/pokemon",
-    "Philibert":  "https://www.philibertnet.com/fr/20-pokemon",
-    "Cultura":    "https://www.cultura.com/carte-pokemon.html",
+    "SmithToys": "https://www.smithtoys.fr/search?query=pokemon",
+    "Philibert": "https://www.philibertnet.com/fr/20-pokemon",
+    "Cultura": "https://www.cultura.com/carte-pokemon.html",
 }
 
+# --- 5) Fonction utilitaire de fetch & parse ---
 async def fetch(session, url):
     async with session.get(url, timeout=20) as resp:
         resp.raise_for_status()
         return await resp.text()
 
-async def search_extension(ext_key, keywords, progress_msg):
+async def search_extension(ext_key: str, keywords: list[str], msg: discord.Message):
+    """Scrape tous les sites et renvoie la liste des nouveautés pour une extension."""
     found = []
-    total = len(SITES)
-    done = 0
-
-    async with aiohttp.ClientSession() as sess:
-        for site, url in SITES.items():
-            done += 1
-            bar = f"[{'█'*done}{'─'*(total-done)}] {done}/{total}"
-            await progress_msg.edit(content=f"🔍 **{ext_key}** → {site} {bar}")
-
-            html = await fetch(sess, url)
-            text = BeautifulSoup(html, "html.parser").get_text().lower()
-
-            if any(kw.lower() in text for kw in keywords):
-                a = BeautifulSoup(html, "html.parser").find(
-                    "a",
-                    href=True,
-                    text=lambda t: t and ("précommande" in t.lower() or ext_key.lower() in t.lower())
-                )
-                link = a["href"] if a else url
-                found.append(f"• **{site}** ➔ {link}")
-
+    async with aiohttp.ClientSession() as session:
+        for i, (site_name, url) in enumerate(SITES.items(), 1):
+            await msg.edit(content=f"🔍 Recherche {ext_key} sur **{site_name}** ({i}/{len(SITES)})…")
+            try:
+                html = await fetch(session, url)
+                soup = BeautifulSoup(html, "html.parser")
+                text = soup.get_text(" ", strip=True).lower()
+                # cherche un des mots-clés
+                if any(kw.lower() in text for kw in keywords):
+                    found.append(f"{site_name}: **nouveauté {ext_key} détectée**")
+                await asyncio.sleep(1)  # léger délai pour ne pas spammer
+            except Exception as e:
+                found.append(f"{site_name}: erreur ({e.__class__.__name__})")
     return found
 
-async def do_search(ext_key, ctx):
-    msg = await ctx.send(f"🔎 Lancement de **{ext_key}**…")
+async def do_search(ext_key: str, ctx: commands.Context):
+    """Lance la recherche et envoie le résultat."""
+    msg = await ctx.send(f"🔎 Recherche manuelle {ext_key} en cours…")
     results = await search_extension(ext_key, EXTENSIONS[ext_key], msg)
-
     if results:
-        summary = f"✅ **Précommande {ext_key} trouvée !**\n" + "\n".join(results)
+        await msg.edit(content="\n".join(results))
     else:
-        summary = f"❌ Aucune précommande pour **{ext_key}**."
-    await msg.edit(content=summary)
+        await msg.edit(content=f"✅ Aucune nouveauté {ext_key} trouvée.")
 
-# --- 5) Commandes utilisateur ---
+# --- 6) Commandes Discord ---
 @bot.command(name="ev10")
-async def ev10(ctx):
+async def ev10(ctx: commands.Context):
     await do_search("EV10", ctx)
 
-@bot.command(name="ev8_5")
-async def ev8_5(ctx):
+@bot.command(name="ev8.5")
+async def ev85(ctx: commands.Context):
     await do_search("EV8.5", ctx)
 
 @bot.command(name="ev151")
-async def ev151(ctx):
+async def ev151(ctx: commands.Context):
     await do_search("EV151", ctx)
 
+# --- 7) Logging au démarrage ---
 @bot.event
 async def on_ready():
-    print(f"✅ Connecté sous {bot.user}")
-    await bot.change_presence(activity=discord.Game("!ev10 | !ev8_5 | !ev151"))
+    print(f"✅ Connecté sous {bot.user} (ID salon = {CHANNEL_ID})")
 
-if __name__ == "__main__":
-    bot.run(TOKEN)
+# --- 8) Lancement du bot ---
+bot.run(TOKEN)
