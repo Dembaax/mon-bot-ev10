@@ -1,2 +1,2 @@
 .env
-sent_links.txt
+__pycache__/
